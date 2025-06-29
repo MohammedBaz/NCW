@@ -49,12 +49,12 @@ def load_data():
 
 # --- FORECASTING FUNCTION ---
 @st.cache_data
-def run_forecast(data, variable_to_forecast, years_to_predict):
+def run_forecast(_data, variable_to_forecast, years_to_predict):
     """
     Runs a Prophet forecast on the selected variable.
     Caches the result to avoid re-computation.
     """
-    prophet_df = data.reset_index()[['date_time_utc', variable_to_forecast]].rename(
+    prophet_df = _data.reset_index()[['date_time_utc', variable_to_forecast]].rename(
         columns={'date_time_utc': 'ds', variable_to_forecast: 'y'}
     )
     model = Prophet()
@@ -89,7 +89,7 @@ def render_visualization_ui(df, available_columns):
     st.markdown("Analyze historical trends and relationships in the environmental data.")
 
     # Resample data
-    freq_map = {'Hourly (raw)': 'H', 'Daily': 'D', 'Weekly': 'W', 'Monthly': 'ME'}
+    freq_map = {'Hourly (raw)': 'H', 'Daily': 'D', 'Weekly': 'W', 'ME': 'ME'}
     resampled_df = df[available_columns].resample(freq_map[resample_freq]).mean() if resample_freq != 'Hourly (raw)' else df
 
     # KPI Metrics
@@ -146,9 +146,15 @@ def render_visualization_ui(df, available_columns):
 def render_forecasting_ui(df, available_columns):
     """Renders the UI for the Forecasting view."""
     st.sidebar.header("Forecasting Controls")
+    
+    # *** FIX IS HERE: Made the default index selection robust ***
+    default_ix = 0
+    if 'air_temp_c' in available_columns:
+        default_ix = available_columns.index('air_temp_c')
+    
     forecast_var = st.sidebar.selectbox(
         "Select variable to forecast:", options=available_columns,
-        index=available_columns.index('air_temp_c')
+        index=default_ix
     )
     
     # --- MAIN PANEL ---
@@ -158,11 +164,16 @@ def render_forecasting_ui(df, available_columns):
     if st.button(f"Generate 10-Year Forecast for {forecast_var}"):
         with st.spinner("Training model and generating forecast... This may take a minute."):
             daily_df = df[[forecast_var]].resample('D').mean().dropna()
-            forecast_data, forecast_fig = run_forecast(daily_df, forecast_var, 10)
-            st.plotly_chart(forecast_fig, use_container_width=True)
-            st.subheader("Forecast Data")
-            st.markdown("The table below shows the predicted value (`yhat`), along with the lower and upper uncertainty intervals (`yhat_lower`, `yhat_upper`).")
-            st.dataframe(forecast_data[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(365), use_container_width=True)
+            
+            # Check if there is enough data to run a forecast
+            if len(daily_df) < 2:
+                st.error("Not enough historical data to generate a forecast for this variable. Please choose another.")
+            else:
+                forecast_data, forecast_fig = run_forecast(daily_df, forecast_var, 10)
+                st.plotly_chart(forecast_fig, use_container_width=True)
+                st.subheader("Forecast Data")
+                st.markdown("The table below shows the predicted value (`yhat`), along with the lower and upper uncertainty intervals (`yhat_lower`, `yhat_upper`).")
+                st.dataframe(forecast_data[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(365), use_container_width=True)
 
 
 # --- MAIN APP LOGIC ---
