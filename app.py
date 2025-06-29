@@ -5,6 +5,7 @@ from prophet import Prophet
 from prophet.plot import plot_plotly
 import math
 import google.generativeai as genai
+import re
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -225,19 +226,19 @@ def render_ai_assistant_ui(df, available_columns):
             with st.spinner("Thinking..."):
                 try:
                     hist_summary = df.describe().to_string()
-                    species_context = "..." # Same as before
+                    species_context = """
+                    **Carrying Capacity Model Information:**
+                    - The model considers four species: Gazella arabica, Arabian Reem, Arabian oryx, and Nubian ibex.
+                    - Baseline populations are 24, 92, 33, and 34, respectively.
+                    - The model uses predicted future NDVI to determine the available forage area for these species.
+                    """
                     
-                    # --- FIX IS HERE: Dynamic Forecasting based on Prompt ---
                     forecast_context = ""
-                    # Keywords to trigger a forecast
                     forecast_keywords = ['predict', 'forecast', 'expect', 'in 202', 'what will', 'future']
                     
-                    # Check if the prompt seems to be asking for a future value
                     if any(keyword in prompt.lower() for keyword in forecast_keywords):
-                        # Find which variable the user is asking about
                         variable_to_forecast = None
                         for col in available_columns:
-                            # e.g., if 'temp' is in prompt, and 'air_temp_c' is a column
                             if col.split('_')[0] in prompt.lower():
                                 variable_to_forecast = col
                                 break
@@ -247,10 +248,27 @@ def render_ai_assistant_ui(df, available_columns):
                             daily_df = df[[variable_to_forecast]].resample('D').mean().dropna()
                             if len(daily_df) > 1:
                                 forecast_data, _ = run_forecast(daily_df, variable_to_forecast, 10)
-                                forecast_context = f"""
-                                **A specific forecast for '{variable_to_forecast}' has been generated to answer the user's question. Here is a summary of the prediction:**
-                                {forecast_data[['ds', 'yhat']].tail().to_string()}
-                                """
+                                
+                                # --- FIX IS HERE: Filter forecast for the specific year ---
+                                year_match = re.search(r'\b(20\d{2})\b', prompt)
+                                if year_match:
+                                    target_year = int(year_match.group(1))
+                                    year_specific_forecast = forecast_data[forecast_data['ds'].dt.year == target_year]
+                                    if not year_specific_forecast.empty:
+                                        avg_prediction = year_specific_forecast['yhat'].mean()
+                                        forecast_context = f"""
+                                        **A specific forecast for '{variable_to_forecast}' for the year {target_year} has been generated to answer the user's question.**
+                                        - The average predicted value for {variable_to_forecast} in {target_year} is: {avg_prediction:.2f}.
+                                        - You should state this value clearly in your answer.
+                                        """
+                                    else:
+                                        forecast_context = f"**A forecast for '{variable_to_forecast}' was generated, but the requested year {target_year} is outside the 10-year prediction window.**"
+                                else:
+                                    # Default if no year is found in prompt
+                                    forecast_context = f"""
+                                    **A forecast for '{variable_to_forecast}' has been generated. Here is a summary of the prediction for the last few days of the forecast period:**
+                                    {forecast_data[['ds', 'yhat']].tail().to_string()}
+                                    """
                     
                     full_prompt = f"""You are an expert data analyst for the Sharaan Nature Reserve. Answer the user's question based *only* on the data provided.
 
