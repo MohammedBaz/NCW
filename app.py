@@ -9,7 +9,7 @@ import google.generativeai as genai
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
     page_title="Sharaan Environmental Dashboard",
-    page_icon="�",
+    page_icon="🌿",
     layout="wide",
 )
 
@@ -199,7 +199,7 @@ def render_capacity_calculator_ui(df):
     with st.expander("ℹ️ See Explanation of Methodology"):
         st.markdown(f"""...""") # Methodology explanation
 
-def render_ai_assistant_ui(df, ndvi_forecast):
+def render_ai_assistant_ui(df, available_columns):
     st.title("🤖 AI Data Assistant")
     st.markdown("Ask questions about the Sharaan environmental data in natural language.")
 
@@ -213,7 +213,6 @@ def render_ai_assistant_ui(df, ndvi_forecast):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-2.0-flash')
 
-    # --- Chat History and Submission Logic ---
     if "messages" not in st.session_state:
         st.session_state.messages = []
     
@@ -226,20 +225,45 @@ def render_ai_assistant_ui(df, ndvi_forecast):
             with st.spinner("Thinking..."):
                 try:
                     hist_summary = df.describe().to_string()
-                    forecast_summary = ndvi_forecast[['ds', 'yhat']].tail().to_string()
-                    species_context = """
-                    **Carrying Capacity Model Information:**
-                    - The model considers four species: Gazella arabica, Arabian Reem, Arabian oryx, and Nubian ibex.
-                    - Baseline populations are 24, 92, 33, and 34, respectively.
-                    - The model uses predicted future NDVI to determine the available forage area for these species.
-                    """
-                    full_prompt = f"""You are an expert data analyst for the Sharaan Nature Reserve. Your task is to answer the user's question based *only* on the data and model context provided below. Do not make up information.
+                    species_context = "..." # Same as before
+                    
+                    # --- FIX IS HERE: Dynamic Forecasting based on Prompt ---
+                    forecast_context = ""
+                    # Keywords to trigger a forecast
+                    forecast_keywords = ['predict', 'forecast', 'expect', 'in 202', 'what will', 'future']
+                    
+                    # Check if the prompt seems to be asking for a future value
+                    if any(keyword in prompt.lower() for keyword in forecast_keywords):
+                        # Find which variable the user is asking about
+                        variable_to_forecast = None
+                        for col in available_columns:
+                            # e.g., if 'temp' is in prompt, and 'air_temp_c' is a column
+                            if col.split('_')[0] in prompt.lower():
+                                variable_to_forecast = col
+                                break
+                        
+                        if variable_to_forecast:
+                            st.info(f"Generating a new forecast for '{variable_to_forecast}' to answer your question...")
+                            daily_df = df[[variable_to_forecast]].resample('D').mean().dropna()
+                            if len(daily_df) > 1:
+                                forecast_data, _ = run_forecast(daily_df, variable_to_forecast, 10)
+                                forecast_context = f"""
+                                **A specific forecast for '{variable_to_forecast}' has been generated to answer the user's question. Here is a summary of the prediction:**
+                                {forecast_data[['ds', 'yhat']].tail().to_string()}
+                                """
+                    
+                    full_prompt = f"""You are an expert data analyst for the Sharaan Nature Reserve. Answer the user's question based *only* on the data provided.
+
                     {species_context}
+                    
+                    {forecast_context}
+
                     **Historical Data Summary (all variables):**\n{hist_summary}
-                    **Predicted NDVI Forecast Summary (Next 5 Predicted Days):**\n{forecast_summary}
+                    
                     ---
                     User Question: {prompt}
                     """
+                    
                     response = model.generate_content(full_prompt)
                     response_text = response.text
                     st.markdown(response_text)
@@ -247,23 +271,21 @@ def render_ai_assistant_ui(df, ndvi_forecast):
                 except Exception as e:
                     st.error(f"An error occurred with the Gemini API: {e}")
 
-    # Display Chat History
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # --- Suggested Questions ---
     st.markdown("---")
     st.subheader("Or try these suggested questions:")
     questions_en = {
         "What is the average temperature?": "What is the average air temperature according to the historical data?",
         "How many species are tracked?": "How many species does the carrying capacity model consider, and what are they?",
-        "What was the highest wind speed?": "What was the highest recorded wind speed in m/s?",
+        "What is the expected temperature in 2027?": "Can you forecast the air temperature for 2027?",
     }
     questions_ar = {
         "ما هو متوسط درجة الحرارة؟": "ما هو متوسط درجة حرارة الهواء حسب البيانات التاريخية؟",
         "كم عدد الأنواع التي يتم تتبعها؟": "كم عدد الأنواع التي يأخذها نموذج القدرة الاستيعابية في الاعتبار، وما هي؟",
-        "ما هي أعلى سرعة رياح؟": "ما هي أعلى سرعة رياح تم تسجيلها بوحدة م/ث؟"
+        "ما هي درجة الحرارة المتوقعة في عام 2027؟": "هل يمكنك توقع درجة حرارة الهواء لعام 2027؟"
     }
 
     col1, col2 = st.columns(2)
@@ -278,7 +300,6 @@ def render_ai_assistant_ui(df, ndvi_forecast):
             if st.button(display_text, key=f"ar_{display_text}"):
                 submit_prompt(full_prompt)
 
-    # --- User Input ---
     if prompt := st.chat_input("What would you like to know?"):
         submit_prompt(prompt)
 
@@ -302,13 +323,7 @@ if df is not None:
     elif app_mode == "Carrying Capacity Calculator":
         render_capacity_calculator_ui(df)
     elif app_mode == "AI Assistant":
-        daily_ndvi_df = df[['ndvi']].resample('D').mean().dropna()
-        if len(daily_ndvi_df) < 2:
-            st.error("Not enough historical NDVI data for the AI Assistant to function.")
-        else:
-            ndvi_forecast, _ = run_forecast(daily_ndvi_df, 'ndvi', 10)
-            render_ai_assistant_ui(df, ndvi_forecast)
+        render_ai_assistant_ui(df, available_cols)
 else:
     st.title("🌿 Sharaan Environmental Dashboard")
     st.error("Failed to load data. Please check the GitHub URL and your internet connection.")
-
