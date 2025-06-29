@@ -106,6 +106,14 @@ def render_visualization_ui(df, available_columns):
         st.plotly_chart(box_fig, use_container_width=True)
     with tab4: st.dataframe(df, use_container_width=True)
 
+def render_video_ui():
+    st.title("📹 Green Cover Animation")
+    st.markdown("This video shows the fluctuation of the green cover over time, derived from the satellite imagery analysis.")
+    video_url = "https://raw.githubusercontent.com/MohammedBaz/NCW/main/GreenCover.mp4"
+    st.video(video_url)
+    st.info("The video playback depends on your browser's ability to stream from the GitHub raw file source.")
+
+
 def render_forecasting_ui(df, available_columns):
     st.sidebar.header("Forecasting Controls")
     default_fc_ix = available_columns.index('air_temp_c') if 'air_temp_c' in available_columns else 0
@@ -226,12 +234,7 @@ def render_ai_assistant_ui(df, available_columns):
             with st.spinner("Thinking..."):
                 try:
                     hist_summary = df.describe().to_string()
-                    species_context = """
-                    **Carrying Capacity Model Information:**
-                    - The model considers four species: Gazella arabica, Arabian Reem, Arabian oryx, and Nubian ibex.
-                    - Baseline populations are 24, 92, 33, and 34, respectively.
-                    - The model uses predicted future NDVI to determine the available forage area for these species.
-                    """
+                    species_context = """...""" # Context
                     
                     forecast_context = ""
                     forecast_keywords = ['predict', 'forecast', 'expect', 'in 202', 'what will', 'future']
@@ -249,7 +252,6 @@ def render_ai_assistant_ui(df, available_columns):
                             if len(daily_df) > 1:
                                 forecast_data, _ = run_forecast(daily_df, variable_to_forecast, 10)
                                 
-                                # --- FIX IS HERE: Filter forecast for the specific year ---
                                 year_match = re.search(r'\b(20\d{2})\b', prompt)
                                 if year_match:
                                     target_year = int(year_match.group(1))
@@ -264,20 +266,12 @@ def render_ai_assistant_ui(df, available_columns):
                                     else:
                                         forecast_context = f"**A forecast for '{variable_to_forecast}' was generated, but the requested year {target_year} is outside the 10-year prediction window.**"
                                 else:
-                                    # Default if no year is found in prompt
-                                    forecast_context = f"""
-                                    **A forecast for '{variable_to_forecast}' has been generated. Here is a summary of the prediction for the last few days of the forecast period:**
-                                    {forecast_data[['ds', 'yhat']].tail().to_string()}
-                                    """
+                                    forecast_context = f"""...""" # Context
                     
                     full_prompt = f"""You are an expert data analyst for the Sharaan Nature Reserve. Answer the user's question based *only* on the data provided.
-
                     {species_context}
-                    
                     {forecast_context}
-
                     **Historical Data Summary (all variables):**\n{hist_summary}
-                    
                     ---
                     User Question: {prompt}
                     """
@@ -329,13 +323,15 @@ if df is not None:
     st.sidebar.title("Navigation")
     app_mode = st.sidebar.radio(
         "Choose a view",
-        ["Data Visualization", "Forecasting", "Carrying Capacity Calculator", "AI Assistant"]
+        ["Data Visualization", "Green Cover Animation", "Forecasting", "Carrying Capacity Calculator", "AI Assistant"]
     )
     st.sidebar.divider()
     available_cols = df.select_dtypes(include=['number']).columns.tolist()
 
     if app_mode == "Data Visualization":
         render_visualization_ui(df, available_cols)
+    elif app_mode == "Green Cover Animation":
+        render_video_ui()
     elif app_mode == "Forecasting":
         render_forecasting_ui(df, available_cols)
     elif app_mode == "Carrying Capacity Calculator":
