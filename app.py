@@ -311,4 +311,4 @@ if df is not None:
 else:
     st.title("🌿 Sharaan Environmental Dashboard")
     st.error("Failed to load data. Please check the GitHub URL and your internet connection.")
-�
+
