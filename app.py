@@ -149,7 +149,7 @@ def render_capacity_calculator_ui(df):
     selected_year = st.sidebar.selectbox("Select a future year for recommendation:", options=future_years)
     
     # --- Calculations based on Forecasted Data ---
-    # Get historical min/max for scaling
+    # Get historical min/max for scaling scenario
     hist_annual_means = df['ndvi'].resample('YE').mean()
     min_hist_ndvi, max_hist_ndvi = hist_annual_means.min(), hist_annual_means.max()
 
@@ -163,15 +163,17 @@ def render_capacity_calculator_ui(df):
         
     predicted_year_ndvi = predicted_annual_mean_df['yhat'].mean()
 
-    # Determine scenario based on predicted NDVI
+    # Determine scenario based on predicted NDVI's position within historical range
     ndvi_ratio = (predicted_year_ndvi - min_hist_ndvi) / (max_hist_ndvi - min_hist_ndvi) * 100
     if ndvi_ratio > 60: scenario, color = "High", "green"
     elif 41 <= ndvi_ratio <= 60: scenario, color = "Medium", "orange"
     elif 20 <= ndvi_ratio <= 40: scenario, color = "Low", "red"
     else: scenario, color = "Very Low", "darkred"
 
-    # Effective green area calculation
-    effective_green_area = TOTAL_AREA_KM2 * (predicted_year_ndvi / max_hist_ndvi)
+    # *** FIX IS HERE: Corrected the effective green area calculation ***
+    # The effective area is the total area multiplied by the predicted NDVI value.
+    # This treats NDVI as a direct proxy for the proportion of productive land.
+    effective_green_area = TOTAL_AREA_KM2 * predicted_year_ndvi
     
     # --- Display Results ---
     st.header(f"Predicted Scenario for {selected_year}")
@@ -204,7 +206,7 @@ def render_capacity_calculator_ui(df):
         The recommendation is based on a **predictive model**:
         1.  **NDVI Forecast:** A 10-year forecast for NDVI is generated using the historical data.
         2.  **Predicted Green Cover:** The average **predicted** NDVI for the selected year ({selected_year}) is used as a proxy for future vegetation health.
-        3.  **Predicted Forage Area:** The total area ({TOTAL_AREA_KM2} km²) is multiplied by the ratio of the *predicted* NDVI to the *historical maximum* annual NDVI. For {selected_year}, this results in a predicted effective green area of **{effective_green_area:,.0f} km²**.
+        3.  **Predicted Forage Area:** The total area ({TOTAL_AREA_KM2} km²) is multiplied directly by the *predicted NDVI value*. For {selected_year}, this results in a predicted effective green area of **{effective_green_area:,.0f} km²**.
         4.  **Predicted Max Capacity:** The predicted area is divided by each species' consumption rate to find the maximum sustainable population for that future year.
         5.  **Release Scenario:**
             - **High (>60% productivity):** Release up to the predicted maximum capacity.
