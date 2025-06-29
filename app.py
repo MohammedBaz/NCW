@@ -45,6 +45,10 @@ def load_data():
 # --- FORECASTING FUNCTION ---
 @st.cache_data
 def run_forecast(_data, variable_to_forecast, years_to_predict):
+    """
+    Runs a Prophet forecast on the selected variable.
+    Caches the result to avoid re-computation.
+    """
     prophet_df = _data.reset_index()[['date_time_utc', variable_to_forecast]].rename(
         columns={'date_time_utc': 'ds', variable_to_forecast: 'y'}
     )
@@ -117,9 +121,18 @@ def render_forecasting_ui(df, available_columns):
                 st.dataframe(forecast_data[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(365), use_container_width=True)
 
 def render_capacity_calculator_ui(df):
-    st.title("🐐 Carrying Capacity Calculator")
-    st.markdown("This tool estimates the number of animals that can be sustainably released based on the annual green cover, proxied by the average NDVI.")
-    
+    st.title("🐐 Predictive Carrying Capacity Calculator")
+    st.markdown("This tool **forecasts** future environmental conditions to estimate the number of animals that can be sustainably released.")
+
+    # --- Run NDVI Forecast ---
+    with st.spinner("Generating 10-year NDVI forecast... This is needed for the calculation."):
+        daily_ndvi_df = df[['ndvi']].resample('D').mean().dropna()
+        if len(daily_ndvi_df) < 2:
+            st.error("Not enough historical NDVI data to generate a forecast for the calculator.")
+            return
+        # The forecast runs once and is cached
+        ndvi_forecast, _ = run_forecast(daily_ndvi_df, 'ndvi', 10)
+
     # --- Species Data and Constants ---
     TOTAL_AREA_KM2 = 2257
     species_data = {
@@ -129,34 +142,45 @@ def render_capacity_calculator_ui(df):
         'Nubian ibex': {'baseline': 34, 'consumption': 10},
     }
     
-    # --- Sidebar Controls ---
+    # --- Sidebar Controls for Future Year Selection ---
     st.sidebar.header("Calculator Controls")
-    available_years = sorted(df.index.year.unique())
-    selected_year = st.sidebar.selectbox("Select year for analysis:", options=available_years, index=len(available_years)-1)
+    last_hist_year = df.index.year.max()
+    future_years = [last_hist_year + i for i in range(1, 11)]
+    selected_year = st.sidebar.selectbox("Select a future year for recommendation:", options=future_years)
     
-    # --- Calculations ---
-    annual_means = df['ndvi'].resample('YE').mean()
-    min_hist_ndvi, max_hist_ndvi = annual_means.min(), annual_means.max()
-    current_year_ndvi = annual_means[annual_means.index.year == selected_year].values[0]
+    # --- Calculations based on Forecasted Data ---
+    # Get historical min/max for scaling
+    hist_annual_means = df['ndvi'].resample('YE').mean()
+    min_hist_ndvi, max_hist_ndvi = hist_annual_means.min(), hist_annual_means.max()
+
+    # Get forecasted annual mean for the selected future year
+    forecast_df_indexed = ndvi_forecast.set_index('ds')
+    predicted_annual_mean_df = forecast_df_indexed[forecast_df_indexed.index.year == selected_year]
     
-    # Determine scenario
-    ndvi_ratio = (current_year_ndvi - min_hist_ndvi) / (max_hist_ndvi - min_hist_ndvi) * 100
+    if predicted_annual_mean_df.empty:
+        st.error(f"Could not retrieve forecast for the year {selected_year}.")
+        return
+        
+    predicted_year_ndvi = predicted_annual_mean_df['yhat'].mean()
+
+    # Determine scenario based on predicted NDVI
+    ndvi_ratio = (predicted_year_ndvi - min_hist_ndvi) / (max_hist_ndvi - min_hist_ndvi) * 100
     if ndvi_ratio > 60: scenario, color = "High", "green"
     elif 41 <= ndvi_ratio <= 60: scenario, color = "Medium", "orange"
     elif 20 <= ndvi_ratio <= 40: scenario, color = "Low", "red"
     else: scenario, color = "Very Low", "darkred"
 
     # Effective green area calculation
-    effective_green_area = TOTAL_AREA_KM2 * (current_year_ndvi / max_hist_ndvi)
+    effective_green_area = TOTAL_AREA_KM2 * (predicted_year_ndvi / max_hist_ndvi)
     
     # --- Display Results ---
-    st.header(f"Analysis for {selected_year}")
+    st.header(f"Predicted Scenario for {selected_year}")
     col1, col2, col3 = st.columns(3)
-    col1.metric("Annual Average NDVI", f"{current_year_ndvi:.4f}")
-    col2.metric("Vegetation Scenario", scenario)
-    st.markdown(f"**Scenario:** <span style='color:{color}; font-weight:bold;'>{scenario}</span> ({ndvi_ratio:.1f}% of historical maximum productivity)", unsafe_allow_html=True)
+    col1.metric("Predicted Annual Average NDVI", f"{predicted_year_ndvi:.4f}")
+    col2.metric("Predicted Vegetation Scenario", scenario)
+    st.markdown(f"**Predicted Scenario:** <span style='color:{color}; font-weight:bold;'>{scenario}</span> ({ndvi_ratio:.1f}% of historical maximum productivity)", unsafe_allow_html=True)
 
-    st.subheader("Recommended Animal Release Plan")
+    st.subheader(f"Recommended Animal Release Plan for {selected_year+1}")
     results = []
     for species, data in species_data.items():
         max_capacity = effective_green_area / data['consumption'] if data['consumption'] > 0 else 0
@@ -168,8 +192,8 @@ def render_capacity_calculator_ui(df):
         results.append({
             "Species": species,
             "Current Population (Baseline)": data['baseline'],
-            "Max Sustainable Population": math.floor(max_capacity),
-            "Recommended Release for Next Year": release_count
+            "Predicted Max Population": math.floor(max_capacity),
+            "Recommended Release": release_count
         })
     
     results_df = pd.DataFrame(results)
@@ -177,14 +201,14 @@ def render_capacity_calculator_ui(df):
     
     with st.expander("ℹ️ See Explanation of Methodology"):
         st.markdown(f"""
-        The recommendation is based on the following model:
-        1.  **Total Area:** The Sharaan Nature Reserve is assumed to be **{TOTAL_AREA_KM2} km²**.
-        2.  **Annual Green Cover:** The average NDVI for the selected year ({current_year_ndvi:.4f}) is used as a proxy for vegetation health.
-        3.  **Effective Forage Area:** The total area is multiplied by the ratio of the current year's NDVI to the historical maximum annual NDVI. For {selected_year}, this results in an effective green area of **{effective_green_area:,.0f} km²**.
-        4.  **Max Capacity:** The effective area is divided by each species' consumption rate to find the maximum sustainable population.
+        The recommendation is based on a **predictive model**:
+        1.  **NDVI Forecast:** A 10-year forecast for NDVI is generated using the historical data.
+        2.  **Predicted Green Cover:** The average **predicted** NDVI for the selected year ({selected_year}) is used as a proxy for future vegetation health.
+        3.  **Predicted Forage Area:** The total area ({TOTAL_AREA_KM2} km²) is multiplied by the ratio of the *predicted* NDVI to the *historical maximum* annual NDVI. For {selected_year}, this results in a predicted effective green area of **{effective_green_area:,.0f} km²**.
+        4.  **Predicted Max Capacity:** The predicted area is divided by each species' consumption rate to find the maximum sustainable population for that future year.
         5.  **Release Scenario:**
-            - **High (>60% productivity):** Release up to the maximum calculated capacity.
-            - **Medium (41-60%):** Release up to 50% of the difference between max capacity and baseline.
+            - **High (>60% productivity):** Release up to the predicted maximum capacity.
+            - **Medium (41-60%):** Release up to 50% of the difference between predicted max capacity and baseline.
             - **Low/Very Low (<41%):** No releases are recommended to allow the environment to recover.
         """)
 
