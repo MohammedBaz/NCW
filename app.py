@@ -132,6 +132,8 @@ def render_capacity_calculator_ui(df):
         ndvi_forecast, _ = run_forecast(daily_ndvi_df, 'ndvi', 10)
 
     TOTAL_AREA_KM2 = 2257
+    USABLE_FORAGE_PERCENTAGE = 0.60 # Use only 60% of the total area for calculation
+    
     species_data = {
         'Gazella arabica': {'baseline': 24, 'consumption': 4, 'limit_factor': 1.0},
         'Arabian Reem': {'baseline': 92, 'consumption': 0.5, 'limit_factor': 1.0},
@@ -162,7 +164,9 @@ def render_capacity_calculator_ui(df):
     elif 20 <= ndvi_ratio <= 40: scenario, color = "Low", "red"
     else: scenario, color = "Very Low", "darkred"
 
-    effective_green_area = TOTAL_AREA_KM2 * predicted_year_ndvi
+    # *** FIX IS HERE: Calculation now uses only a percentage of the total area ***
+    base_forage_area = TOTAL_AREA_KM2 * USABLE_FORAGE_PERCENTAGE
+    effective_green_area = base_forage_area * predicted_year_ndvi
     
     st.header(f"Predicted Scenario for {selected_year}")
     col1, col2, col3 = st.columns(3)
@@ -194,7 +198,7 @@ def render_capacity_calculator_ui(df):
     five_year_data = []
     for year in future_years[:5]:
         pred_ndvi_for_year = forecast_df_indexed[forecast_df_indexed.index.year == year]['yhat'].mean()
-        eff_area = TOTAL_AREA_KM2 * pred_ndvi_for_year
+        eff_area = base_forage_area * pred_ndvi_for_year
         for species, data in species_data.items():
             max_pop = (eff_area / data['consumption']) * data['limit_factor'] if data['consumption'] > 0 else 0
             five_year_data.append({
@@ -216,10 +220,11 @@ def render_capacity_calculator_ui(df):
         The recommendation is based on a **predictive model**:
         1.  **NDVI Forecast:** A 10-year forecast for NDVI is generated.
         2.  **Predicted Green Cover:** The average **predicted** NDVI for the selected year is used as a proxy for future vegetation health.
-        3.  **Predicted Forage Area:** The total area ({TOTAL_AREA_KM2} km²) is multiplied by the *predicted NDVI value*.
-        4.  **Species Limiting Factor:** A species-specific factor is applied to the calculation. For the **Arabian Oryx**, this is set to **0.25** to account for other habitat constraints, ensuring more realistic numbers.
-        5.  **Predicted Max Capacity:** The forage area is divided by consumption rate and multiplied by the limiting factor to find the sustainable population.
-        6.  **Release Scenario:**
+        3.  **Usable Forage Area:** The model assumes only **{USABLE_FORAGE_PERCENTAGE:.0%}** of the total reserve area ({TOTAL_AREA_KM2} km²) is suitable for grazing.
+        4.  **Predicted Forage Area:** The usable area is multiplied by the *predicted NDVI value*. For {selected_year}, this results in a predicted effective green area of **{effective_green_area:,.0f} km²**.
+        5.  **Species Limiting Factor:** A species-specific factor is applied. For the **Arabian Oryx**, this is set to **0.25** to account for other habitat constraints.
+        6.  **Predicted Max Capacity:** The forage area is divided by consumption rate and multiplied by the limiting factor to find the sustainable population.
+        7.  **Release Scenario:**
             - **High (>60% productivity):** Release up to the predicted maximum capacity.
             - **Medium (41-60%):** Release up to 50% of the difference between predicted max capacity and baseline.
             - **Low/Very Low (<41%):** No releases are recommended.
