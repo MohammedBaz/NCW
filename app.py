@@ -199,35 +199,27 @@ def render_capacity_calculator_ui(df):
     with st.expander("ℹ️ See Explanation of Methodology"):
         st.markdown(f"""...""") # Methodology explanation
 
-def render_ai_assistant_ui(df, ndvi_forecast):
+def render_ai_assistant_ui(df):
     st.title("🤖 AI Data Assistant")
     st.markdown("Ask questions about the Sharaan environmental data in natural language.")
 
-    # --- FIX IS HERE: Get API Key from Streamlit secrets ---
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
     except KeyError:
         st.error("GEMINI_API_KEY secret not found. Please set it in your Streamlit Cloud app settings.")
-        st.warning("You can still use the app, but the AI Assistant will be disabled.")
-        return
-
-    if not api_key:
-        st.warning("Your GEMINI_API_KEY secret is empty. Please provide a valid key.")
+        st.warning("The AI Assistant is disabled.")
         return
 
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-2.0-flash')
 
-    # --- Initialize Chat History ---
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # --- Display Chat History ---
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # --- User Input ---
     if prompt := st.chat_input("What would you like to know?"):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -236,17 +228,23 @@ def render_ai_assistant_ui(df, ndvi_forecast):
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
-                    # --- Prepare data context for Gemini ---
+                    # --- FIX IS HERE: Expanded the context for Gemini ---
                     hist_summary = df.describe().to_string()
-                    forecast_summary = ndvi_forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail().to_string()
                     
-                    full_prompt = f"""You are an expert data analyst for the Sharaan Nature Reserve. Your task is to answer the user's question based *only* on the data provided below. Do not make up information.
+                    # Create context from the carrying capacity calculator
+                    species_context = """
+                    **Carrying Capacity Model Information:**
+                    - The model considers four species: Gazella arabica, Arabian Reem, Arabian oryx, and Nubian ibex.
+                    - Baseline populations are 24, 92, 33, and 34, respectively.
+                    - The model uses predicted future NDVI to determine the available forage area for these species.
+                    """
+                    
+                    full_prompt = f"""You are an expert data analyst for the Sharaan Nature Reserve. Your task is to answer the user's question based *only* on the data and model context provided below. Do not make up information.
+
+                    {species_context}
 
                     **Historical Data Summary (all variables):**
                     {hist_summary}
-
-                    **Predicted NDVI Forecast Summary (Next 5 Predicted Days):**
-                    {forecast_summary}
 
                     ---
                     User Question: {prompt}
@@ -279,13 +277,7 @@ if df is not None:
     elif app_mode == "Carrying Capacity Calculator":
         render_capacity_calculator_ui(df)
     elif app_mode == "AI Assistant":
-        # AI assistant needs the NDVI forecast as well
-        daily_ndvi_df = df[['ndvi']].resample('D').mean().dropna()
-        if len(daily_ndvi_df) < 2:
-            st.error("Not enough historical NDVI data for the AI Assistant to function.")
-        else:
-            ndvi_forecast, _ = run_forecast(daily_ndvi_df, 'ndvi', 10)
-            render_ai_assistant_ui(df, ndvi_forecast)
+        render_ai_assistant_ui(df)
 else:
     st.title("🌿 Sharaan Environmental Dashboard")
     st.error("Failed to load data. Please check the GitHub URL and your internet connection.")
