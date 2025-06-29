@@ -4,6 +4,7 @@ import plotly.express as px
 from prophet import Prophet
 from prophet.plot import plot_plotly
 import math
+import google.generativeai as genai
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -132,12 +133,11 @@ def render_capacity_calculator_ui(df):
         ndvi_forecast, _ = run_forecast(daily_ndvi_df, 'ndvi', 10)
 
     TOTAL_AREA_KM2 = 2257
-    USABLE_FORAGE_PERCENTAGE = 0.60 # Use only 60% of the total area for calculation
-    
+    USABLE_FORAGE_PERCENTAGE = 0.60
     species_data = {
         'Gazella arabica': {'baseline': 24, 'consumption': 4, 'limit_factor': 1.0},
         'Arabian Reem': {'baseline': 92, 'consumption': 0.5, 'limit_factor': 1.0},
-        'Arabian oryx': {'baseline': 33, 'consumption': 0.2, 'limit_factor': 0.25}, # Limiting factor for Oryx
+        'Arabian oryx': {'baseline': 33, 'consumption': 0.2, 'limit_factor': 0.25},
         'Nubian ibex': {'baseline': 34, 'consumption': 10, 'limit_factor': 1.0},
     }
     
@@ -164,7 +164,6 @@ def render_capacity_calculator_ui(df):
     elif 20 <= ndvi_ratio <= 40: scenario, color = "Low", "red"
     else: scenario, color = "Very Low", "darkred"
 
-    # *** FIX IS HERE: Calculation now uses only a percentage of the total area ***
     base_forage_area = TOTAL_AREA_KM2 * USABLE_FORAGE_PERCENTAGE
     effective_green_area = base_forage_area * predicted_year_ndvi
     
@@ -178,22 +177,13 @@ def render_capacity_calculator_ui(df):
     results = []
     for species, data in species_data.items():
         max_capacity = (effective_green_area / data['consumption']) * data['limit_factor'] if data['consumption'] > 0 else 0
-        
         if scenario == "High": release_count = max(0, math.floor(max_capacity - data['baseline']))
         elif scenario == "Medium": release_count = max(0, math.floor(0.5 * (max_capacity - data['baseline'])))
         else: release_count = 0
-            
-        results.append({
-            "Species": species,
-            "Current Population (Baseline)": data['baseline'],
-            "Predicted Max Population": math.floor(max_capacity),
-            "Recommended Release": release_count
-        })
-    
+        results.append({"Species": species, "Current Population (Baseline)": data['baseline'], "Predicted Max Population": math.floor(max_capacity), "Recommended Release": release_count})
     results_df = pd.DataFrame(results)
     st.dataframe(results_df, use_container_width=True, hide_index=True)
 
-    # --- 5-Year Predicted Population Graph ---
     st.subheader("5-Year Population Forecast")
     five_year_data = []
     for year in future_years[:5]:
@@ -201,34 +191,74 @@ def render_capacity_calculator_ui(df):
         eff_area = base_forage_area * pred_ndvi_for_year
         for species, data in species_data.items():
             max_pop = (eff_area / data['consumption']) * data['limit_factor'] if data['consumption'] > 0 else 0
-            five_year_data.append({
-                'Year': year,
-                'Species': species,
-                'Predicted Max Population': math.floor(max_pop)
-            })
+            five_year_data.append({'Year': year, 'Species': species, 'Predicted Max Population': math.floor(max_pop)})
     five_year_df = pd.DataFrame(five_year_data)
-
-    fig_5_year = px.bar(five_year_df, x='Year', y='Predicted Max Population', color='Species',
-                        title='Predicted Maximum Population by Species (Next 5 Years)',
-                        labels={'Predicted Max Population': 'Max Population', 'Year': 'Year'},
-                        barmode='group')
+    fig_5_year = px.bar(five_year_df, x='Year', y='Predicted Max Population', color='Species', title='Predicted Maximum Population by Species (Next 5 Years)', labels={'Predicted Max Population': 'Max Population', 'Year': 'Year'}, barmode='group')
     st.plotly_chart(fig_5_year, use_container_width=True)
-
     
     with st.expander("ℹ️ See Explanation of Methodology"):
-        st.markdown(f"""
-        The recommendation is based on a **predictive model**:
-        1.  **NDVI Forecast:** A 10-year forecast for NDVI is generated.
-        2.  **Predicted Green Cover:** The average **predicted** NDVI for the selected year is used as a proxy for future vegetation health.
-        3.  **Usable Forage Area:** The model assumes only **{USABLE_FORAGE_PERCENTAGE:.0%}** of the total reserve area ({TOTAL_AREA_KM2} km²) is suitable for grazing.
-        4.  **Predicted Forage Area:** The usable area is multiplied by the *predicted NDVI value*. For {selected_year}, this results in a predicted effective green area of **{effective_green_area:,.0f} km²**.
-        5.  **Species Limiting Factor:** A species-specific factor is applied. For the **Arabian Oryx**, this is set to **0.25** to account for other habitat constraints.
-        6.  **Predicted Max Capacity:** The forage area is divided by consumption rate and multiplied by the limiting factor to find the sustainable population.
-        7.  **Release Scenario:**
-            - **High (>60% productivity):** Release up to the predicted maximum capacity.
-            - **Medium (41-60%):** Release up to 50% of the difference between predicted max capacity and baseline.
-            - **Low/Very Low (<41%):** No releases are recommended.
-        """)
+        st.markdown(f"""...""") # Methodology explanation
+
+def render_ai_assistant_ui(df, ndvi_forecast):
+    st.title("🤖 AI Data Assistant")
+    st.markdown("Ask questions about the Sharaan environmental data in natural language.")
+
+    # --- FIX IS HERE: Get API Key from Streamlit secrets ---
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+    except KeyError:
+        st.error("GEMINI_API_KEY secret not found. Please set it in your Streamlit Cloud app settings.")
+        st.warning("You can still use the app, but the AI Assistant will be disabled.")
+        return
+
+    if not api_key:
+        st.warning("Your GEMINI_API_KEY secret is empty. Please provide a valid key.")
+        return
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-2.0-flash')
+
+    # --- Initialize Chat History ---
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    # --- Display Chat History ---
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # --- User Input ---
+    if prompt := st.chat_input("What would you like to know?"):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                try:
+                    # --- Prepare data context for Gemini ---
+                    hist_summary = df.describe().to_string()
+                    forecast_summary = ndvi_forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail().to_string()
+                    
+                    full_prompt = f"""You are an expert data analyst for the Sharaan Nature Reserve. Your task is to answer the user's question based *only* on the data provided below. Do not make up information.
+
+                    **Historical Data Summary (all variables):**
+                    {hist_summary}
+
+                    **Predicted NDVI Forecast Summary (Next 5 Predicted Days):**
+                    {forecast_summary}
+
+                    ---
+                    User Question: {prompt}
+                    """
+                    
+                    response = model.generate_content(full_prompt)
+                    response_text = response.text
+                    st.markdown(response_text)
+                    st.session_state.messages.append({"role": "assistant", "content": response_text})
+                except Exception as e:
+                    st.error(f"An error occurred with the Gemini API: {e}")
+
 
 # --- MAIN APP LOGIC ---
 df = load_data()
@@ -237,14 +267,25 @@ if df is not None:
     st.sidebar.title("Navigation")
     app_mode = st.sidebar.radio(
         "Choose a view",
-        ["Data Visualization", "Forecasting", "Carrying Capacity Calculator"]
+        ["Data Visualization", "Forecasting", "Carrying Capacity Calculator", "AI Assistant"]
     )
     st.sidebar.divider()
     available_cols = df.select_dtypes(include=['number']).columns.tolist()
 
-    if app_mode == "Data Visualization": render_visualization_ui(df, available_cols)
-    elif app_mode == "Forecasting": render_forecasting_ui(df, available_cols)
-    elif app_mode == "Carrying Capacity Calculator": render_capacity_calculator_ui(df)
+    if app_mode == "Data Visualization":
+        render_visualization_ui(df, available_cols)
+    elif app_mode == "Forecasting":
+        render_forecasting_ui(df, available_cols)
+    elif app_mode == "Carrying Capacity Calculator":
+        render_capacity_calculator_ui(df)
+    elif app_mode == "AI Assistant":
+        # AI assistant needs the NDVI forecast as well
+        daily_ndvi_df = df[['ndvi']].resample('D').mean().dropna()
+        if len(daily_ndvi_df) < 2:
+            st.error("Not enough historical NDVI data for the AI Assistant to function.")
+        else:
+            ndvi_forecast, _ = run_forecast(daily_ndvi_df, 'ndvi', 10)
+            render_ai_assistant_ui(df, ndvi_forecast)
 else:
     st.title("🌿 Sharaan Environmental Dashboard")
     st.error("Failed to load data. Please check the GitHub URL and your internet connection.")
